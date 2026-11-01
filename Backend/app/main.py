@@ -1,5 +1,6 @@
 """FastAPI application factory."""
 
+import asyncio
 import logging
 import time
 import uuid
@@ -15,11 +16,15 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app import __version__
+from app.api.documents import router as documents_router
 from app.api.routes import router
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging, request_id_var
 from app.rate_limit import limiter
+from app.services.answer_cache import AnswerCache
+from app.services.attachments import AttachmentStore
 from app.services.chat import ChatService
+from app.services.insights import InsightsStore
 from app.services.knowledge_base import KnowledgeBase
 from app.services.llm import GeminiClient
 
@@ -52,9 +57,29 @@ def create_app(settings: Settings | None = None, llm: GeminiClient | None = None
         )
         kb = KnowledgeBase(settings.policies_dir, settings.index_cache_dir, client)
         await kb.load()
+        cache = AnswerCache(
+            settings.answer_cache_size, settings.answer_cache_ttl_seconds, settings.answer_cache_similarity
+        )
+        insights = None
+        if settings.insights_enabled:
+            insights = InsightsStore(settings.insights_db_path, settings.insights_retention_days)
+            await insights.init()
+        attachments = None
+        if settings.attachments_enabled:
+            attachments = AttachmentStore(
+                settings.attachments_dir,
+                ttl_seconds=settings.attachment_ttl_minutes * 60,
+                max_bytes=settings.max_attachment_mb * 2**20,
+                max_text_chars=settings.max_attachment_chars,
+            )
+            await asyncio.to_thread(attachments.purge_expired)
+        app.state.attachments = attachments
+        app.state.settings = settings
         app.state.llm = client
         app.state.knowledge_base = kb
-        app.state.chat_service = ChatService(settings, client, kb)
+        app.state.answer_cache = cache
+        app.state.insights = insights
+        app.state.chat_service = ChatService(settings, client, kb, cache, insights, attachments)
         logger.info(
             "Startup complete",
             extra={
@@ -118,12 +143,13 @@ def create_app(settings: Settings | None = None, llm: GeminiClient | None = None
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "X-Request-ID"],
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type", "X-Request-ID", "X-Admin-Token"],
         expose_headers=["X-Request-ID"],
     )
 
     app.include_router(router)
+    app.include_router(documents_router)
     return app
 
 

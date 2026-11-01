@@ -5,9 +5,13 @@ services:
     environment:
       ENVIRONMENT: production
       CORS_ORIGINS: http://localhost:8080
+      INSIGHTS_DB_PATH: /app/state/insights.db
     volumes:
-      # Edit policies without rebuilding; restart the backend to re-index.
-      - ./Backend/data/policies:/app/data/policies:ro
+      # Policy documents live on the host; uploads from the admin UI are written here.
+      # Changes are picked up automatically (no restart needed).
+      - ./Backend/data/policies:/app/data/policies
+      # Persists HR insights (unanswered questions, feedback) across deploys.
+      - backend-state:/app/state
     restart: unless-stopped
 
   frontend:
@@ -18,3 +22,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  backend-state:

@@ -32,12 +32,30 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+# Libraries that would otherwise print warnings through Python's last-resort handler.
+_LIBRARIES = ("httpx", "httpcore", "google_genai", "slowapi", "multipart", "PIL", "pypdf", "rapidocr_onnxruntime")
+
+
 def configure_logging(level: str) -> None:
+    """Set up app logging. LOG_LEVEL=OFF (default) leaves the terminal with uvicorn's own output only.
+
+    Any other level (DEBUG/INFO/WARNING/ERROR) emits structured JSON logs, e.g. for production.
+    Uvicorn's loggers are never touched, so its startup and access lines always look as usual.
+    """
+    root = logging.getLogger()
+    root.handlers = [h for h in root.handlers if not isinstance(h.formatter, JsonFormatter)]
+
+    if level.upper() == "OFF":
+        # A NullHandler on root also stops Python's last-resort handler printing library warnings.
+        root.addHandler(logging.NullHandler())
+        root.setLevel(logging.CRITICAL + 1)
+        for name in _LIBRARIES:
+            logging.getLogger(name).setLevel(logging.CRITICAL + 1)
+        return
+
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
-    root = logging.getLogger()
-    root.handlers = [handler]
+    root.addHandler(handler)
     root.setLevel(level.upper())
-    # Keep third-party noise down; uvicorn access logs are replaced by our middleware.
-    for noisy in ("uvicorn.access", "httpx", "httpcore", "google_genai"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    for name in _LIBRARIES:
+        logging.getLogger(name).setLevel(logging.WARNING)

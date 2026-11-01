@@ -16,6 +16,13 @@ Browser ──► nginx (Frontend, :8080) ──/api──► FastAPI (Backend, 
 | Area | What's included |
 |---|---|
 | Grounded answers | Retrieval-augmented generation over `Backend/data/policies/*.md`, using Gemini embeddings and an on-disk cache. Falls back to keyword search if embeddings are unavailable. Answers cite their sources. |
+| Answer cache | Repeated standalone questions are answered without calling Gemini: in about 0.5s instead of 5s, using no quota. Reworded questions match when their meaning is very similar *and* they map to the same policy sections. Editing a policy clears the cache. |
+| Conversation memory | Follow-up questions ("and how many can I carry forward?") are searched together with the previous question. History is capped by `MAX_HISTORY_CHARS` to bound token cost. |
+| HR insights | Questions the policies don't cover are logged, and so is 👍/👎 feedback with an optional comment. HR reviews them at `GET /api/v1/admin/insights` to find gaps in the policy documentation. No employee identity is stored, sensitive data is never stored, and records are purged after `INSIGHTS_RETENTION_DAYS`. |
+| Escalation | An **Email HR** link on every answer opens an email to `HR_CONTACT_EMAIL` with the question pre-filled. |
+| Previous chats | A sidebar of past conversations (Today / Yesterday / Previous 7 days / Older), which you can switch between or delete. Chats are saved **only in the employee's browser** for 30 days (up to 50). Messages with sensitive data are saved redacted. |
+| Policy documents | The **📄 Documents** panel lists every document the bot answers from. Anyone can open them, and answer citations link to them (PDF citations open at the cited page). HR admins unlock upload and delete with `ADMIN_API_TOKEN`. Upload accepts **PDF, Word (.docx), Markdown and text**. Changes take effect immediately, and only new or changed sections are re-embedded. |
+| Chat attachments | Employees can attach their **own** files with 📎, drag-and-drop or paste: images (PNG, JPEG, WebP), PDFs (including scanned ones), Word and text files. They can then ask about the file, for example "does my offer letter match policy?". Attachments are private to the conversation, never indexed, can't be downloaded back, and are deleted after `ATTACHMENT_TTL_MINUTES`. **Every file is checked for sensitive data before Gemini sees it.** Images and scanned PDFs are read with local OCR (RapidOCR) for this check, so an ID-card photo is rejected without leaving the server. Image metadata (EXIF/GPS) is stripped. |
 | Streaming | Token streaming over Server-Sent Events, with a Stop button and handling for client disconnects |
 | Sensitive data guard | Messages containing SSN, Aadhaar, PAN, passport, driver's licence or card numbers, or medical records are **blocked before they reach Gemini**. They are not logged, and they are redacted in the UI. |
 | Reliability | Retries with exponential backoff for 429/5xx and network errors, request timeouts, friendly error messages, retry from the UI |
@@ -100,15 +107,33 @@ Open http://localhost:8080. nginx serves the React build and proxies `/api` to t
 
 ---
 
-## 4. Adding your HR policies
+## 4. HR insights: what employees ask that the policies don't answer
 
-Put Markdown files in `Backend/data/policies/`. Use `#` for the document title and `##` / `###` for sections. Each section becomes a retrievable chunk, and its title is shown as the citation.
+```powershell
+curl -H "X-Admin-Token: <ADMIN_API_TOKEN from Backend/.env>" "http://localhost:8000/api/v1/admin/insights?days=30"
+```
 
-Restart the backend to re-index. Embeddings are cached in `data/.index/` and rebuilt only when content changes. For PDFs or Word documents, convert them to Markdown first. Tools like `markitdown` or `pandoc` work well.
+The response lists:
+- **Unanswered questions**, grouped by question and ranked by how often they're asked. These are the clearest signal of which policy to write or clarify next.
+- **Feedback** counts and the **not-helpful answers**, with the employees' comments.
 
----
+The endpoint is disabled when `ADMIN_API_TOKEN` is unset. The data is stored in `Backend/data/insights.db`, or in the `backend-state` volume under Docker.
 
-## 5. Configuration reference
+## 5. Adding your HR policies
+
+**From the UI (recommended):** open **📄 Documents**, enter the `ADMIN_API_TOKEN` from `Backend/.env`, then drag in PDF, Word (.docx), Markdown or text files. Uploading a file with an existing name replaces that document. Each upload is:
+- limited to 20 files and `MAX_UPLOAD_MB` (default 10 MB) per file;
+- rejected if it contains sensitive personal data, such as ID or card numbers or medical records;
+- rejected if it has no extractable text, such as a scanned PDF. Run OCR on scanned PDFs first.
+
+**From the file system:** copy files into `Backend/data/policies/`. They're picked up automatically on the next question, with no restart needed.
+
+How documents are split into sections for citations:
+- **Markdown:** `#` is the title; `##` and `###` headings are sections.
+- **Word:** the Title and Heading 1–2 styles become sections.
+- **PDF:** one section per page, cited as "Page N".
+
+## 6. Configuration reference
 
 All settings are environment variables. See [Backend/.env.example](Backend/.env.example).
 
@@ -124,8 +149,14 @@ All settings are environment variables. See [Backend/.env.example](Backend/.env.
 | `RATE_LIMIT` | `20/minute` | Per-IP limit on chat endpoints |
 | `RATE_LIMIT_STORAGE_URI` | `memory://` | Use `redis://host:6379/0` when running several replicas |
 | `MAX_MESSAGE_CHARS` / `MAX_HISTORY_MESSAGES` | `4000` / `20` | Request size limits |
-| `RETRIEVAL_TOP_K` / `RETRIEVAL_MIN_SCORE` | `4` / `0.35` | Retrieval tuning |
+| `RETRIEVAL_TOP_K` / `RETRIEVAL_MIN_SCORE` | `4` / `0.62` | Retrieval tuning. Unrelated policy chunks still score about 0.58–0.62 with `gemini-embedding-001`. |
+| `KNOWLEDGE_GAP_SCORE` | `0.66` | Below this best-match score, a question is logged as not covered by the policies |
+| `ANSWER_CACHE_SIZE` / `ANSWER_CACHE_TTL_SECONDS` / `ANSWER_CACHE_SIMILARITY` | `1000` / `86400` / `0.90` | Answer cache. Set the size to `0` to disable it. |
+| `ATTACHMENTS_ENABLED` / `ATTACHMENT_TTL_MINUTES` / `MAX_ATTACHMENT_MB` / `MAX_ATTACHMENTS_PER_MESSAGE` | `true` / `60` / `10` / `5` | Employee chat attachments |
+| `MAX_HISTORY_CHARS` | `12000` | Total conversation history sent to Gemini |
+| `INSIGHTS_ENABLED` / `INSIGHTS_RETENTION_DAYS` / `ADMIN_API_TOKEN` | `true` / `90` / unset | HR insights storage and admin access |
 | `ENVIRONMENT` | `development` | `production` disables `/docs` |
+| `LOG_LEVEL` | `OFF` | `OFF` shows only uvicorn's default terminal output. Set `INFO` (or `DEBUG`/`WARNING`/`ERROR`) for structured JSON app logs with request IDs, recommended in production. |
 
 ## API
 
@@ -133,6 +164,14 @@ All settings are environment variables. See [Backend/.env.example](Backend/.env.
 |---|---|---|
 | `POST` | `/api/v1/chat/stream` | `{message, history}` → SSE events: `sources`, `token`…, then `done` or `error` |
 | `POST` | `/api/v1/chat` | Same input, returns a single JSON response `{answer, sources, blocked}` |
+| `POST` | `/api/v1/feedback` | `{rating: 1 or -1, question, answer, sources, comment?}` → 204 |
+| `GET` | `/api/v1/config` | Company name, HR contact email, whether feedback is enabled |
+| `GET` | `/api/v1/admin/insights` | HR insights. Requires the `X-Admin-Token` header. |
+| `GET` | `/api/v1/documents` | List policy documents (public) |
+| `GET` | `/api/v1/documents/{name}` | Open or download a document (public) |
+| `POST` | `/api/v1/admin/documents` | Upload files as multipart `files`. Requires `X-Admin-Token`. |
+| `DELETE` | `/api/v1/admin/documents/{name}` | Delete a document. Requires `X-Admin-Token`. |
+| `POST` | `/api/v1/attachments` | Attach a file to a conversation (multipart `file`). Returns `{id, name, kind}`; pass `attachment_ids` to the chat endpoints. |
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/readyz` | Readiness: Gemini reachability, index size, retrieval mode |
 

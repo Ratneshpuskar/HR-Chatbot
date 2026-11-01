@@ -13,3 +13,6 @@ __pycache__/
 Backend/data/.index/
 Frontend/node_modules/
 Frontend/dist/
+Backend/data/insights.db*
+Backend/data/.attachments/
+Backend/data/.upload-*/

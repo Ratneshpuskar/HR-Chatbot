@@ -47,6 +47,8 @@ def _empty_answer_error() -> LLMError:
 class ChatTurn:
     role: str  # "user" | "model"
     text: str
+    # (mime_type, bytes) of images attached by the employee; sent as image parts after the text.
+    images: tuple[tuple[str, bytes], ...] = ()
 
 
 # Failures we translate into LLMError: HTTP errors from Gemini, and network/TLS/timeout errors.
@@ -182,7 +184,14 @@ class GeminiClient:
 
     @staticmethod
     def _contents(turns: list[ChatTurn]) -> list[types.Content]:
-        return [types.Content(role=t.role, parts=[types.Part(text=t.text)]) for t in turns]
+        return [
+            types.Content(
+                role=t.role,
+                parts=[types.Part(text=t.text)]
+                + [types.Part.from_bytes(data=data, mime_type=mime) for mime, data in t.images],
+            )
+            for t in turns
+        ]
 
     async def generate(self, system_prompt: str, turns: list[ChatTurn]) -> str:
         async def call(model: str) -> types.GenerateContentResponse:

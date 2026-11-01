@@ -30,7 +30,7 @@ def test_chat_returns_answer_with_sources(client, fake_llm) -> None:
     system_prompt, turns = fake_llm.calls[0]
     assert "HR Assistant" in system_prompt
     assert turns[-1].role == "user"
-    assert "POLICY CONTEXT" in turns[-1].text
+    assert "OUR HR POLICIES" in turns[-1].text
 
 
 def test_response_has_request_id_and_security_headers(client) -> None:

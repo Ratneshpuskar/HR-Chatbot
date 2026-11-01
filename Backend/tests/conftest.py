@@ -1,4 +1,5 @@
 import os
+import shutil
 
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
 
@@ -7,7 +8,7 @@ from collections.abc import AsyncIterator, Iterator  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.config import Settings  # noqa: E402
+from app.config import BASE_DIR, Settings  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.rate_limit import limiter  # noqa: E402
 from app.services.llm import ChatTurn, LLMError  # noqa: E402
@@ -54,11 +55,20 @@ def fake_llm() -> FakeLLM:
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
+    # Work on a copy of the sample policies so upload/delete tests never touch the real folder.
+    policies = tmp_path / "policies"
+    shutil.copytree(BASE_DIR / "data" / "policies", policies)
     return Settings(
+        _env_file=None,  # tests must not depend on the developer's local .env
         gemini_api_key="test-key",
+        policies_dir=policies,
         index_cache_dir=tmp_path / "index",
+        insights_db_path=tmp_path / "insights.db",
+        attachments_dir=tmp_path / "attachments",
+        admin_api_token="admin-secret",
         rate_limit="1000/minute",
         retrieval_min_score=0.0,
+        use_os_trust_store=False,
     )
 
 

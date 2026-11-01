@@ -16,8 +16,8 @@ export function WelcomeScreen({ onPick }: Props) {
     <div className="welcome">
       <h2>Hi! I'm your HR Assistant.</h2>
       <p>
-        Ask me about company policies, leave, benefits, payroll and more. I answer from official HR policy documents
-        and show you the sources I used.
+        Ask me about company policies, leave, benefits, payroll and more. I answer from official HR policy documents and
+        show you the sources I used.
       </p>
       <div className="suggestions">
         {SUGGESTIONS.map((q) => (
