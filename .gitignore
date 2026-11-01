@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Generated
+Backend/data/.index/
+Frontend/node_modules/
+Frontend/dist/
